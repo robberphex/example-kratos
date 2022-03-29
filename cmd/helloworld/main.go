@@ -1,14 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
-	"fmt"
-	"os"
-
-	v1 "helloworld/api/helloworld/v1"
-	"helloworld/internal/conf"
-
+	nacos "github.com/go-kratos/kratos/contrib/registry/nacos/v2"
 	"github.com/go-kratos/kratos/v2"
 	"github.com/go-kratos/kratos/v2/config"
 	"github.com/go-kratos/kratos/v2/config/file"
@@ -16,6 +10,12 @@ import (
 	"github.com/go-kratos/kratos/v2/middleware/tracing"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
 	"github.com/go-kratos/kratos/v2/transport/http"
+	"github.com/nacos-group/nacos-sdk-go/clients"
+	"github.com/nacos-group/nacos-sdk-go/common/constant"
+	"github.com/nacos-group/nacos-sdk-go/vo"
+	"helloworld/internal/conf"
+	native_log "log"
+	"os"
 )
 
 // go build -ldflags "-X main.Version=x.y.z"
@@ -49,12 +49,24 @@ func newApp(logger log.Logger, hs *http.Server, gs *grpc.Server) *kratos.App {
 }
 
 func main() {
-	x := v1.File_api_helloworld_v1_greeter_proto
+	sc := []constant.ServerConfig{
+		*constant.NewServerConfig("mse-96efa264-p.nacos-ans.mse.aliyuncs.com", 8848),
+	}
+	cc := constant.ClientConfig{
+		NamespaceId: "af086fe8-176f-4982-bc15-c7ec7f1db94e",
+	}
+	client, err := clients.NewNamingClient(
+		vo.NacosClientParam{
+			ClientConfig:  &cc,
+			ServerConfigs: sc,
+		},
+	)
+	if err != nil {
+		native_log.Panic(err)
+	}
 
-	nn := x.Messages().Get(0).Options()
-	_ = nn
-	bs, _ := json.Marshal(x)
-	fmt.Println(string(bs))
+	r := nacos.New(client)
+
 	flag.Parse()
 	logger := log.With(log.NewStdLogger(os.Stdout),
 		"ts", log.DefaultTimestamp,

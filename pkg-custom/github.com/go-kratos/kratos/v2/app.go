@@ -145,6 +145,7 @@ func (a *App) Run() error {
 	}
 	serviceMetadata := service_contract_v1.ServiceMetadata{
 		ServiceContract: &serviceContract,
+		Protocols:       []string{"grpc"},
 	}
 	ose := getOpenSergoEndpoint()
 	timeoutCtx, _ := context.WithTimeout(context.TODO(), 10*time.Second)
