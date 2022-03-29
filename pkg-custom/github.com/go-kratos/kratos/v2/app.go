@@ -2,22 +2,16 @@ package kratos
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"github.com/go-kratos/kratos/v2/log"
-	"github.com/go-kratos/kratos/v2/registry"
-	"github.com/go-kratos/kratos/v2/transport"
-	"github.com/go-kratos/kratos/v2/transport/grpc"
-	service_contract_v1 "github.com/opensergo/opensergo-go/proto/service_contract/v1"
-	ogrpc "google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/go-kratos/kratos/v2/log"
+	"github.com/go-kratos/kratos/v2/registry"
+	"github.com/go-kratos/kratos/v2/transport"
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
@@ -64,10 +58,6 @@ func New(opts ...Option) *App {
 	}
 }
 
-type openSergoConfig struct {
-	Endpoint string `json:"endpoint"`
-}
-
 // ID returns app instance id.
 func (a *App) ID() string { return a.opts.id }
 
@@ -88,18 +78,6 @@ func (a *App) Endpoint() []string {
 	return a.instance.Endpoints
 }
 
-// parseMetadata finds the file descriptor bytes specified meta.
-// For SupportPackageIsVersion4, m is the name of the proto file, we
-// call proto.FileDescriptor to get the byte slice.
-// For SupportPackageIsVersion3, m is a byte slice itself.
-func parseMetadata(meta interface{}) (protoreflect.FileDescriptor, error) {
-	// Check if meta is the file name.
-	if fileNameForMeta, ok := meta.(string); ok {
-		return protoregistry.GlobalFiles.FindFileByPath(fileNameForMeta)
-	}
-	return nil, nil
-}
-
 // Run executes all OnStart hooks registered with the application's Lifecycle.
 func (a *App) Run() error {
 	instance, err := a.buildInstance()
@@ -109,25 +87,8 @@ func (a *App) Run() error {
 	ctx := NewContext(a.ctx, a)
 	eg, ctx := errgroup.WithContext(ctx)
 	wg := sync.WaitGroup{}
-
-	var services []*service_contract_v1.ServiceDescriptor
 	for _, srv := range a.opts.servers {
 		srv := srv
-
-		if g, ok := srv.(*grpc.Server); ok {
-			serviceInfo := g.Server.GetServiceInfo()
-			serviceNames := make([]string, 0, len(serviceInfo))
-
-			for svc, info := range serviceInfo {
-				serviceNames = append(serviceNames, svc)
-				serviceDesc, err := processServiceInfo(svc, info)
-				if err != nil {
-					continue
-				}
-				services = append(services, serviceDesc)
-			}
-		}
-
 		eg.Go(func() error {
 			<-ctx.Done() // wait for stop signal
 			sctx, cancel := context.WithTimeout(NewContext(context.Background(), a), a.opts.stopTimeout)
@@ -140,21 +101,6 @@ func (a *App) Run() error {
 			return srv.Start(ctx)
 		})
 	}
-	serviceContract := service_contract_v1.ServiceContract{
-		Services: services,
-	}
-	serviceMetadata := service_contract_v1.ServiceMetadata{
-		ServiceContract: &serviceContract,
-	}
-	ose := getOpenSergoEndpoint()
-	timeoutCtx, _ := context.WithTimeout(context.TODO(), 10*time.Second)
-	conn, err := ogrpc.DialContext(timeoutCtx, ose, ogrpc.WithTransportCredentials(insecure.NewCredentials()))
-	mClient := service_contract_v1.NewMetadataServiceClient(conn)
-	reply, err := mClient.ReportMetadata(context.TODO(), &service_contract_v1.ReportMetadataRequest{
-		AppName:         a.Name(),
-		ServiceMetadata: []*service_contract_v1.ServiceMetadata{&serviceMetadata},
-	})
-	_ = reply
 	wg.Wait()
 	if a.opts.registrar != nil {
 		rctx, rcancel := context.WithTimeout(a.opts.ctx, a.opts.registrarTimeout)
@@ -186,50 +132,6 @@ func (a *App) Run() error {
 		return err
 	}
 	return nil
-}
-
-func processServiceInfo(name string, serviceInfo ogrpc.ServiceInfo) (*service_contract_v1.ServiceDescriptor, error) {
-	var methods []*service_contract_v1.MethodDescriptor
-	fd, err := parseMetadata(serviceInfo.Metadata)
-	if err != nil {
-		return nil, err
-	}
-	//fd.Options()
-	for i := 0; i < fd.Services().Len(); i++ {
-		sd := fd.Services().Get(i)
-		if sd.FullName() != protoreflect.FullName(name) {
-			continue
-		}
-		for j := 0; j < sd.Methods().Len(); j++ {
-			md := sd.Methods().Get(i)
-			mName := string(md.Name())
-			inputType := string(md.Input().FullName())
-			outputType := string(md.Output().FullName())
-			methodDesc := service_contract_v1.MethodDescriptor{
-				Name:        mName,
-				InputTypes:  []string{inputType},
-				OutputTypes: []string{outputType},
-			}
-			methods = append(methods, &methodDesc)
-			// process Type
-		}
-	}
-
-	serviceDesc := service_contract_v1.ServiceDescriptor{
-		Name:    name,
-		Methods: methods,
-	}
-	return &serviceDesc, nil
-}
-
-func getOpenSergoEndpoint() string {
-	config_str := os.Getenv("OPENSERGO_BOOTSTRAP_CONFIG")
-	config := openSergoConfig{}
-	err := json.Unmarshal([]byte(config_str), &config)
-	if err != nil {
-		panic(err)
-	}
-	return config.Endpoint
 }
 
 // Stop gracefully stops the application.
