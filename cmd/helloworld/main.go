@@ -2,22 +2,27 @@ package main
 
 import (
 	"flag"
+	"github.com/go-kratos/kratos/contrib/registry/nacos/v2"
+	"github.com/go-kratos/kratos/v2/config"
+	"github.com/go-kratos/kratos/v2/config/file"
+	"github.com/go-kratos/kratos/v2/middleware/tracing"
+	"github.com/nacos-group/nacos-sdk-go/clients"
+	"github.com/nacos-group/nacos-sdk-go/common/constant"
+	"github.com/nacos-group/nacos-sdk-go/vo"
+	"helloworld/internal/conf"
+	native_log "log"
 	"os"
 
 	"github.com/go-kratos/kratos/v2"
-	"github.com/go-kratos/kratos/v2/config"
-	"github.com/go-kratos/kratos/v2/config/file"
 	"github.com/go-kratos/kratos/v2/log"
-	"github.com/go-kratos/kratos/v2/middleware/tracing"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
 	"github.com/go-kratos/kratos/v2/transport/http"
-	"helloworld/internal/conf"
 )
 
 // go build -ldflags "-X main.Version=x.y.z"
 var (
 	// Name is the name of the compiled software.
-	Name string
+	Name string = "example-kratos"
 	// Version is the version of the compiled software.
 	Version string
 	// flagconf is the config flag.
@@ -31,6 +36,33 @@ func init() {
 }
 
 func newApp(logger log.Logger, hs *http.Server, gs *grpc.Server) *kratos.App {
+	sc := []constant.ServerConfig{
+		*constant.NewServerConfig("mse-96efa264-p.nacos-ans.mse.aliyuncs.com", 8848),
+	}
+
+	cc := constant.ClientConfig{
+		NamespaceId:         "af086fe8-176f-4982-bc15-c7ec7f1db94e",
+		TimeoutMs:           5000,
+		NotLoadCacheAtStart: true,
+		LogDir:              "/tmp/nacos/log",
+		CacheDir:            "/tmp/nacos/cache",
+		//RotateTime:          "1h",
+		//MaxAge:              3,
+		LogLevel: "debug",
+	}
+
+	client, err := clients.NewNamingClient(
+		vo.NacosClientParam{
+			ClientConfig:  &cc,
+			ServerConfigs: sc,
+		},
+	)
+	if err != nil {
+		native_log.Panic(err)
+	}
+
+	r := nacos.New(client)
+
 	return kratos.New(
 		kratos.ID(id),
 		kratos.Name(Name),
@@ -41,6 +73,7 @@ func newApp(logger log.Logger, hs *http.Server, gs *grpc.Server) *kratos.App {
 			hs,
 			gs,
 		),
+		kratos.Registrar(r),
 	)
 }
 

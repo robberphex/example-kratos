@@ -9,12 +9,15 @@ import (
 	"github.com/go-kratos/kratos/v2/transport"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
 	service_contract_v1 "github.com/opensergo/opensergo-go/proto/service_contract/v1"
-	ogrpc "google.golang.org/grpc"
+	google_grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -110,24 +113,7 @@ func (a *App) Run() error {
 	eg, ctx := errgroup.WithContext(ctx)
 	wg := sync.WaitGroup{}
 
-	var services []*service_contract_v1.ServiceDescriptor
 	for _, srv := range a.opts.servers {
-		srv := srv
-
-		if g, ok := srv.(*grpc.Server); ok {
-			serviceInfo := g.Server.GetServiceInfo()
-			serviceNames := make([]string, 0, len(serviceInfo))
-
-			for svc, info := range serviceInfo {
-				serviceNames = append(serviceNames, svc)
-				serviceDesc, err := processServiceInfo(svc, info)
-				if err != nil {
-					continue
-				}
-				services = append(services, serviceDesc)
-			}
-		}
-
 		eg.Go(func() error {
 			<-ctx.Done() // wait for stop signal
 			sctx, cancel := context.WithTimeout(NewContext(context.Background(), a), a.opts.stopTimeout)
@@ -140,23 +126,8 @@ func (a *App) Run() error {
 			return srv.Start(ctx)
 		})
 	}
-	serviceContract := service_contract_v1.ServiceContract{
-		Services: services,
-	}
-	serviceMetadata := service_contract_v1.ServiceMetadata{
-		ServiceContract: &serviceContract,
-		Protocols:       []string{"grpc"},
-	}
-	ose := getOpenSergoEndpoint()
-	timeoutCtx, _ := context.WithTimeout(context.TODO(), 10*time.Second)
-	conn, err := ogrpc.DialContext(timeoutCtx, ose, ogrpc.WithTransportCredentials(insecure.NewCredentials()))
-	mClient := service_contract_v1.NewMetadataServiceClient(conn)
-	reply, err := mClient.ReportMetadata(context.TODO(), &service_contract_v1.ReportMetadataRequest{
-		AppName:         a.Name(),
-		ServiceMetadata: []*service_contract_v1.ServiceMetadata{&serviceMetadata},
-	})
-	_ = reply
 	wg.Wait()
+	reportMetadata(a, instance)
 	if a.opts.registrar != nil {
 		rctx, rcancel := context.WithTimeout(a.opts.ctx, a.opts.registrarTimeout)
 		defer rcancel()
@@ -189,7 +160,72 @@ func (a *App) Run() error {
 	return nil
 }
 
-func processServiceInfo(name string, serviceInfo ogrpc.ServiceInfo) (*service_contract_v1.ServiceDescriptor, error) {
+func reportMetadata(a *App, instance *registry.ServiceInstance) {
+	var services []*service_contract_v1.ServiceDescriptor
+	for _, srv := range a.opts.servers {
+		srv := srv
+
+		if g, ok := srv.(*grpc.Server); ok {
+			serviceInfo := g.Server.GetServiceInfo()
+			serviceNames := make([]string, 0, len(serviceInfo))
+
+			for svc, info := range serviceInfo {
+				serviceNames = append(serviceNames, svc)
+				serviceDesc, err := processServiceInfo(svc, info)
+				if err != nil {
+					continue
+				}
+				services = append(services, serviceDesc)
+			}
+		}
+	}
+	serviceContract := service_contract_v1.ServiceContract{
+		Services: services,
+	}
+
+	var addrs []*service_contract_v1.SocketAddress
+	for _, endpoint := range instance.Endpoints {
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			log.Warnf("err: %v", err)
+		}
+		if u.Scheme == "grpc" {
+			host, port, err := net.SplitHostPort(u.Host)
+			if err != nil {
+				log.Warnf("err: %v", err)
+			} else {
+				portValue, err := strconv.Atoi(port)
+				if err != nil {
+					log.Warnf("err: %v", err)
+				}
+				addrs = append(addrs, &service_contract_v1.SocketAddress{
+					Address:   host,
+					PortValue: uint32(portValue),
+				})
+			}
+		}
+	}
+
+	serviceMetadata := service_contract_v1.ServiceMetadata{
+		ServiceContract:    &serviceContract,
+		Protocols:          []string{"grpc"},
+		ListeningAddresses: addrs,
+	}
+	ose := getOpenSergoEndpoint()
+	timeoutCtx, _ := context.WithTimeout(context.TODO(), 10*time.Second)
+	conn, err := google_grpc.DialContext(timeoutCtx, ose, google_grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Warnf("err: %v", err)
+	}
+	mClient := service_contract_v1.NewMetadataServiceClient(conn)
+	reply, err := mClient.ReportMetadata(context.TODO(), &service_contract_v1.ReportMetadataRequest{
+		AppName:         a.Name(),
+		ServiceMetadata: []*service_contract_v1.ServiceMetadata{&serviceMetadata},
+	})
+	_ = reply
+}
+
+func processServiceInfo(name string, serviceInfo google_grpc.ServiceInfo) (*service_contract_v1.ServiceDescriptor, error) {
 	var methods []*service_contract_v1.MethodDescriptor
 	fd, err := parseMetadata(serviceInfo.Metadata)
 	if err != nil {

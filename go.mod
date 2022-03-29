@@ -14,4 +14,4 @@ require (
 	google.golang.org/protobuf v1.27.1
 )
 
-replace github.com/go-kratos/kratos/v2 v2.1.5 => ./pkg-custom/github.com/go-kratos/kratos/v2/
+replace github.com/go-kratos/kratos/v2 => ./pkg-custom/github.com/go-kratos/kratos/v2/
