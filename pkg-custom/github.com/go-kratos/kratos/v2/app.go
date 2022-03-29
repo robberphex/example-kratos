@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"io/ioutil"
 	"net"
 	"net/url"
 	"os"
@@ -260,11 +261,20 @@ func processServiceInfo(name string, serviceInfo google_grpc.ServiceInfo) (*serv
 }
 
 func getOpenSergoEndpoint() string {
-	config_str := os.Getenv("OPENSERGO_BOOTSTRAP_CONFIG")
+	var err error
+	configStr := os.Getenv("OPENSERGO_BOOTSTRAP_CONFIG")
+	configBytes := []byte(configStr)
+	if configStr == "" {
+		configPath := os.Getenv("OPENSERGO_BOOTSTRAP")
+		configBytes, err = ioutil.ReadFile(configPath)
+		if err != nil {
+			log.Warnf("err: %v", err)
+		}
+	}
 	config := openSergoConfig{}
-	err := json.Unmarshal([]byte(config_str), &config)
+	err = json.Unmarshal(configBytes, &config)
 	if err != nil {
-		panic(err)
+		log.Warnf("err: %v", err)
 	}
 	return config.Endpoint
 }
